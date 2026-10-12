@@ -165,6 +165,23 @@ mod tests {
     }
 
     #[test]
+    fn malformed_points_fall_back_to_identity_and_points_are_sorted() {
+        let fallback = MonotoneCurve::new(&[(f64::NAN, 0.5), (0.2, f64::INFINITY)]);
+        assert_eq!(fallback.points(), vec![(0.0, 0.0), (1.0, 1.0)]);
+        let curve = MonotoneCurve::new(&[(1.0, 0.9), (0.0, 0.1), (0.5, 0.4)]);
+        assert_eq!(curve.points(), vec![(0.0, 0.1), (0.5, 0.4), (1.0, 0.9)]);
+    }
+
+    #[test]
+    fn identity_lookup_table_interpolates_and_clamps() {
+        let lut = Lut1::identity(17);
+        assert!(lut.is_identity());
+        assert!((lut.eval(0.375) - 0.375).abs() < 1e-6);
+        assert_eq!(lut.eval(-0.25), 0.0);
+        assert_eq!(lut.eval(1.25), 1.0);
+    }
+
+    #[test]
     fn lut_compose() {
         let a = Lut1::from_fn(1024, |x| x * x);
         let b = Lut1::from_fn(1024, |x| x.sqrt());
