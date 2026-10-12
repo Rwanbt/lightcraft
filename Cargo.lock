@@ -3149,6 +3149,7 @@ dependencies = [
  "lightcraft-geom",
  "proptest",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
