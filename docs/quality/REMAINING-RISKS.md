@@ -14,3 +14,22 @@ Baseline: `main` `0ba118de92a81f7463ca0e6d79e1323137b1adae`. PR: https://github.
 | P1 | Cross-platform builds and installers | Build/packaging and runtime smoke differ from comprehensive E2E | Check native builds, package install/uninstall and logs |
 
 **Status:** PARTIALLY VERIFIED (structural inspection only). No claim of production readiness or 100% coverage is valid until run-based proof is collected. Do not remove failing tests or reduce coverage thresholds to obtain green checks.
+
+## Discovered during first CI execution
+
+- **Windows test-fixture path bug:** seven `tests_sync` test failures resulted from
+  mixed separators in expected strings. Fixed in the shared `Scratch::path`
+  helper with a platform-native path assertion, awaiting full Windows CI rerun.
+- **Preview cancellation latency:** full-resolution rendering could take longer
+  than the old cancellation test's one-minute deadline. The worker now checks
+  cancellation between the thumbnail and view render jobs. A single running
+  decode/render is **not instantly interruptible**; deeper cancellation support
+  through the pipeline remains a documented residual limitation.
+- **Coverage overhead and test non-determinism:** the first instrumented workspace
+  run failed on preview timing and yielded no LCOV artifact; new deterministic
+  tests avoid using wall-clock time as proof of cancellation. Rerun required.
+- **Untested/sometimes ignored behaviors:** 26 ignored cases appeared in the
+  historical Linux workspace run. Identify and justify these before claiming
+  full functional verification; counts may change between commits.
+
+Current PR remains **DRAFT**. Historical successes are not proof of current HEAD.
