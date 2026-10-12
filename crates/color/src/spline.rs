@@ -55,10 +55,11 @@ impl MonotoneCurve {
         MonotoneCurve::new(&[(0.0, 0.0), (1.0, 1.0)])
     }
 
+    /// Invalid (NaN) inputs use the first point; other out-of-range inputs clamp.
     pub fn eval(&self, x: f64) -> f64 {
         let n = self.xs.len();
-        if x <= self.xs[0] {
-            return self.ys[0] + self.ms[0] * (x - self.xs[0]).min(0.0) * 0.0;
+        if x.is_nan() || x <= self.xs[0] {
+            return self.ys[0];
         }
         if x >= self.xs[n - 1] {
             return self.ys[n - 1];
@@ -153,6 +154,14 @@ mod tests {
             let y = c.eval(i as f64 / 1000.0);
             assert!((y - 0.5).abs() < 1e-9, "{y}");
         }
+    }
+
+    #[test]
+    fn non_finite_curve_inputs_do_not_panic_or_propagate_nan() {
+        let c = MonotoneCurve::new(&[(0.0, 0.15), (0.5, 0.5), (1.0, 0.85)]);
+        assert_eq!(c.eval(f64::NEG_INFINITY), 0.15);
+        assert_eq!(c.eval(f64::NAN), 0.15);
+        assert_eq!(c.eval(f64::INFINITY), 0.85);
     }
 
     #[test]
