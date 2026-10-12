@@ -44,6 +44,31 @@ GitHub Actions run [38267686177](https://github.com/Rwanbt/lightcraft/actions/ru
 - Missing lines on that commit: `lib.rs` 16; `perceptual.rs` 8; `spline.rs` 7; `transfer.rs` 6; `cct.rs` 0. Subsequent PR commits add contract tests for these gaps; their effect is **not measured yet**.
 - The Linux, Windows and macOS full-suite job conclusions on this historical run were not completed and the run was later cancelled when new commits arrived. They must **not** be marked passed.
 
+## Cross-platform test baseline and CI defects (historical SHA)
+
+The completed [run 38268740650](https://github.com/Rwanbt/lightcraft/actions/runs/38268740650)
+was executed on `39ec7d1326283411ad985d8ff26c32b53cc87ea7`.
+
+- Linux `cargo xtask ci`: **success**; its `cargo test --workspace` stage reported
+  **2,574 passed, 0 failed, 26 ignored** across **83 test-binary reports**
+  (log-parsed values, not a source file count).
+- macOS full workspace tests: **success**.
+- Windows workspace tests: **seven failures** in `tests_sync`; all seven compare
+  mixed `/\` fixture paths against native Windows scanner paths. The scratch
+  path builder now joins components using the host separator, with a regression test.
+- Full workspace LLVM instrumentation: failed after **653 engine tests passed**
+  because the former full-size preview cancellation test timed out while
+  processing the first rendering job. The test now verifies command-to-flag wiring
+  deterministically, with separate worker cancellation tests. The production worker
+  also checks cancellation between the thumbnail and view renders. **Coverage
+  from this run was not collected** because the test runner exited unsuccessfully.
+
+A later [color job on run 38273549385](https://github.com/Rwanbt/lightcraft/actions/runs/38273549385)
+executed **30 tests, 0 failures**, with **649/649 instrumented lines and
+116/116 instrumented functions (100% each)** for `lightcraft-color`.
+It is a historical measurement; it does not validate subsequent HEAD commits
+or imply branch coverage. All changes after that measurement require a fresh CI run.
+
 ## Reproducible checks
 
 The draft PR adds `.github/workflows/quality.yml`. It performs:
