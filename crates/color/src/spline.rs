@@ -6,14 +6,44 @@
 use serde::{Deserialize, Serialize};
 
 /// A curve through control points in `0..1 × 0..1` (x strictly increasing after normalization).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct MonotoneCurve {
     xs: Vec<f64>,
     ys: Vec<f64>,
     ms: Vec<f64>,
 }
 
+/// Preserve the wire format but validate untrusted serialized curves *once*, not
+/// inside the per-pixel evaluation hot path. Deriving Deserialize directly allows
+/// empty or unequal arrays to panic and unsorted x-coordinates to corrupt output.
+#[derive(Deserialize)]
+struct CurveStorage {
+    xs: Vec<f64>,
+    ys: Vec<f64>,
+    ms: Vec<f64>,
+}
+
+impl<'de> Deserialize<'de> for MonotoneCurve {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = CurveStorage::deserialize(deserializer)?;
+        Self::checked_storage(wire.xs, wire.ys, wire.ms)
+            .ok_or_else(|| serde::de::Error::custom("invalid monotone curve control points or tangents"))
+    }
+}
+
 impl MonotoneCurve {
+    fn checked_storage(xs: Vec<f64>, ys: Vec<f64>, ms: Vec<f64>) -> Option<Self> {
+        let n = xs.len();
+        (n >= 2
+            && ys.len() == n
+            && ms.len() == n
+            && xs.iter().all(|x| x.is_finite())
+            && ys.iter().all(|y| y.is_finite())
+            && ms.iter().all(|m| m.is_finite())
+            && xs.windows(2).all(|pair| pair[0] < pair[1]))
+            .then_some(Self { xs, ys, ms })
+    }
+
     /// Build from points; sorts by x, merges duplicates. Fewer than two points → identity.
     pub fn new(points: &[(f64, f64)]) -> MonotoneCurve {
         let mut p: Vec<(f64, f64)> = points.iter().copied().filter(|(x, y)| x.is_finite() && y.is_finite()).collect();
@@ -172,6 +202,41 @@ mod tests {
         assert_eq!(c.eval(f64::NEG_INFINITY), 0.15);
         assert_eq!(c.eval(f64::NAN), 0.15);
         assert_eq!(c.eval(f64::INFINITY), 0.85);
+    }
+
+    #[test]
+    fn malformed_serialized_curves_are_rejected_before_evaluation() {
+        use serde_json::json;
+
+        let invalid = [
+            json!({"xs": [], "ys": [], "ms": []}),
+            json!({"xs": [0.0], "ys": [0.4], "ms": [1.0]}),
+            json!({"xs": [0.0, 1.0], "ys": [0.0], "ms": [1.0, 1.0]}),
+            json!({"xs": [0.0, 1.0], "ys": [0.0, 1.0], "ms": [1.0]}),
+            json!({"xs": [1.0, 0.0], "ys": [0.0, 1.0], "ms": [1.0, 1.0]}),
+            json!({"xs": [0.0, 0.0], "ys": [0.0, 1.0], "ms": [1.0, 1.0]}),
+        ];
+        for wire in invalid {
+            assert!(serde_json::from_value::<MonotoneCurve>(wire.clone()).is_err(), "{wire}");
+        }
+
+        assert!(MonotoneCurve::checked_storage(vec![f64::NAN, 1.0], vec![0.0, 1.0], vec![1.0, 1.0]).is_none());
+        assert!(MonotoneCurve::checked_storage(vec![0.0, 1.0], vec![0.0, f64::INFINITY], vec![1.0, 1.0]).is_none());
+        assert!(MonotoneCurve::checked_storage(vec![0.0, 1.0], vec![0.0, 1.0], vec![1.0, f64::NAN]).is_none());
+    }
+
+    #[test]
+    fn valid_curve_serialization_retains_all_tangents_and_pixels() {
+        let original = MonotoneCurve::new(&[(0.0, 0.1), (0.25, 0.4), (0.7, 0.75), (1.0, 0.95)]);
+        let wire = serde_json::to_vec(&original).unwrap();
+        let decoded: MonotoneCurve = serde_json::from_slice(&wire).unwrap();
+        assert_eq!(decoded, original, "stored slopes remain identical on roundtrip");
+        for i in 0..=256 {
+            let x = i as f64 / 256.0;
+            assert_eq!(decoded.eval(x), original.eval(x));
+        }
+        // Aerial boundary values must remain safe after the wire roundtrip.
+        assert_eq!(decoded.eval(f64::NAN), original.points()[0].1);
     }
 
     #[test]
