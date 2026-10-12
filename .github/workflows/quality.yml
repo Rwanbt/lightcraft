@@ -101,7 +101,8 @@ jobs:
 
   coverage-workspace:
     name: Linux / instrumented workspace baseline
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    # Run the expensive full baseline on dedicated quality-baseline PRs, otherwise weekly/manual.
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || (github.event_name == 'pull_request' && startsWith(github.head_ref, 'test/quality-baseline-'))
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     steps:
