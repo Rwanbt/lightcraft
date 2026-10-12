@@ -231,6 +231,28 @@ mod tests {
     }
 
     #[test]
+    fn matrix_helpers_validate_layout_and_singular_cases() {
+        let m = Mat3::diag(2.0, 3.0, 4.0);
+        assert_eq!(m.apply_f32([1.0, 2.0, 3.0]), [2.0, 6.0, 12.0]);
+        let a = Mat3([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]);
+        assert_eq!(a.transpose(), Mat3([[1.0, 4.0, 7.0], [2.0, 5.0, 8.0], [3.0, 6.0, 9.0]]));
+        assert_eq!(a.transpose().transpose(), a);
+        assert_eq!(a.inverse(), None);
+    }
+
+    #[test]
+    fn chromaticity_and_luminance_have_independent_references() {
+        let xy = Xy::new(0.27, 0.33);
+        let back = Xy::from_xyz(xy.to_xyz());
+        assert!((back.x - xy.x).abs() < 1e-12);
+        assert!((back.y - xy.y).abs() < 1e-12);
+        assert_eq!(Xy::from_xyz([0.0, 0.0, 0.0]), D65);
+        assert_eq!(Xy::from_xyz([-1.0, 0.0, 0.0]), D65);
+        assert!((luminance_2020([1.0, 1.0, 1.0]) - 1.0).abs() < 1e-6);
+        assert!((luminance_2020([0.0, 1.0, 0.0]) - 0.678).abs() < 1e-6);
+    }
+
+    #[test]
     fn hex() {
         assert_eq!(Rgb8::from_hex("#1e1e1e"), Some(Rgb8(30, 30, 30)));
         assert_eq!(Rgb8(1, 2, 255).to_hex(), "#0102ff");
