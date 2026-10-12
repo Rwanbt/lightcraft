@@ -762,7 +762,7 @@ fn activity_cancel_stops_a_preview_build() {
 
     s.execute("activity.cancel", &json!({"id": id})).unwrap();
     assert!(state.cancel.load(Ordering::Relaxed), "the command must signal the worker's actual flag");
-    assert_eq!(s.activity.list()[0].cancelling, true);
+    assert!(s.activity.list()[0].cancelling);
     drop(task);
     assert!(s.activity.list().is_empty(), "the task row must be removed after completion");
 }
