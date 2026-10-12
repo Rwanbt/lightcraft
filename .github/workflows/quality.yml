@@ -48,6 +48,8 @@ jobs:
           rustc --version
           cargo --version
           git rev-parse HEAD
+      - name: Validate LCOV report parser
+        run: python3 -m unittest discover -s scripts -p 'test_quality_coverage.py'
       - name: Complete repository quality gate
         run: cargo xtask ci
 
@@ -91,11 +93,16 @@ jobs:
         run: |
           mkdir -p coverage
           cargo llvm-cov -p lightcraft-color --lib --locked --lcov --output-path coverage/color.lcov
+      - name: Summarize color coverage by crate
+        run: python3 scripts/quality_coverage.py coverage/color.lcov coverage/color.md coverage/color.json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: color-coverage-${{ github.sha }}
-          path: coverage/color.lcov
+          path: |
+            coverage/color.lcov
+            coverage/color.md
+            coverage/color.json
           if-no-files-found: warn
           retention-days: 30
 
@@ -125,10 +132,15 @@ jobs:
         run: |
           mkdir -p coverage
           cargo llvm-cov --workspace --locked --lcov --output-path coverage/workspace.lcov
+      - name: Summarize workspace coverage by crate
+        run: python3 scripts/quality_coverage.py coverage/workspace.lcov coverage/workspace.md coverage/workspace.json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: workspace-coverage-${{ github.sha }}
-          path: coverage/workspace.lcov
+          path: |
+            coverage/workspace.lcov
+            coverage/workspace.md
+            coverage/workspace.json
           if-no-files-found: warn
           retention-days: 30
