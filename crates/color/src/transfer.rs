@@ -113,6 +113,18 @@ mod tests {
     }
 
     #[test]
+    fn gamma_power_laws_are_reversible_and_clip_negative_light() {
+        assert!((gamma_to_linear(0.5, 2.0) - 0.25).abs() < 1e-6);
+        assert!((linear_to_gamma(0.25, 2.0) - 0.5).abs() < 1e-6);
+        assert_eq!(gamma_to_linear(-1.0, 2.0), 0.0);
+        assert_eq!(linear_to_gamma(-1.0, 2.0), 0.0);
+        for code in [0.0, 0.1, 0.5, 1.0] {
+            let back = linear_to_gamma(gamma_to_linear(code, 2.2), 2.2);
+            assert!((back - code).abs() < 1e-6, "{code}");
+        }
+    }
+
+    #[test]
     fn pq_hlg_roundtrip() {
         for i in 0..=50 {
             let y = i as f64 / 50.0;
