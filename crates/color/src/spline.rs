@@ -79,7 +79,8 @@ impl MonotoneCurve {
 
     /// Sample into a LUT of `n` entries over `0..1`.
     pub fn to_lut(&self, n: usize) -> Lut1 {
-        Lut1 { v: (0..n).map(|i| self.eval(i as f64 / (n - 1) as f64) as f32).collect() }
+        let steps = n.saturating_sub(1).max(1);
+        Lut1 { v: (0..n).map(|i| self.eval(i as f64 / steps as f64) as f32).collect() }
     }
 
     pub fn points(&self) -> Vec<(f64, f64)> {
@@ -95,15 +96,24 @@ pub struct Lut1 {
 
 impl Lut1 {
     pub fn identity(n: usize) -> Lut1 {
-        Lut1 { v: (0..n).map(|i| i as f32 / (n - 1) as f32).collect() }
+        let steps = n.saturating_sub(1).max(1);
+        Lut1 { v: (0..n).map(|i| i as f32 / steps as f32).collect() }
     }
     pub fn from_fn(n: usize, f: impl Fn(f32) -> f32) -> Lut1 {
-        Lut1 { v: (0..n).map(|i| f(i as f32 / (n - 1) as f32)).collect() }
+        let steps = n.saturating_sub(1).max(1);
+        Lut1 { v: (0..n).map(|i| f(i as f32 / steps as f32)).collect() }
     }
     #[inline]
     pub fn eval(&self, x: f32) -> f32 {
+        let x = if x.is_nan() { 0.0 } else { x.clamp(0.0, 1.0) };
         let n = self.v.len();
-        let f = x.clamp(0.0, 1.0) * (n - 1) as f32;
+        if n == 0 {
+            return x; // No table: pass through rather than crashing.
+        }
+        if n == 1 {
+            return self.v[0];
+        }
+        let f = x * (n - 1) as f32;
         let i = (f as usize).min(n - 2);
         let t = f - i as f32;
         self.v[i] + (self.v[i + 1] - self.v[i]) * t
@@ -114,7 +124,7 @@ impl Lut1 {
     }
     pub fn is_identity(&self) -> bool {
         let n = self.v.len();
-        self.v.iter().enumerate().all(|(i, &y)| (y - i as f32 / (n - 1) as f32).abs() < 1e-6)
+        n >= 2 && self.v.iter().enumerate().all(|(i, &y)| (y - i as f32 / (n - 1) as f32).abs() < 1e-6)
     }
 }
 
@@ -179,6 +189,28 @@ mod tests {
         assert!((lut.eval(0.375) - 0.375).abs() < 1e-6);
         assert_eq!(lut.eval(-0.25), 0.0);
         assert_eq!(lut.eval(1.25), 1.0);
+    }
+
+    #[test]
+    fn empty_and_single_entry_lookup_tables_never_panic_or_create_nan() {
+        let empty = Lut1::identity(0);
+        assert!(empty.v.is_empty());
+        assert!(!empty.is_identity(), "an absent table cannot prove an identity mapping");
+        assert_eq!(empty.eval(0.375), 0.375, "missing data uses a neutral pass-through");
+        assert_eq!(empty.eval(f32::NAN), 0.0);
+        assert_eq!(empty.eval(f32::INFINITY), 1.0);
+
+        let one = Lut1::identity(1);
+        assert_eq!(one.v, vec![0.0]);
+        assert!(!one.is_identity());
+        assert_eq!(one.eval(0.5), 0.0);
+        assert_eq!(Lut1::from_fn(1, |x| x + 0.25).eval(0.8), 0.25);
+
+        let curve = MonotoneCurve::identity();
+        assert!(curve.to_lut(0).v.is_empty());
+        assert_eq!(curve.to_lut(1).v, vec![0.0]);
+        assert_eq!(curve.to_lut(1).eval(0.8), 0.0);
+        assert!(!Lut1 { v: Vec::new() }.compose(&one).is_identity());
     }
 
     #[test]
