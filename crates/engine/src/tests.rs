@@ -743,18 +743,28 @@ fn preview_build_shows_in_activity_until_it_finishes() {
     assert_eq!(s.execute("library.previewProgress", &json!({})).unwrap()["running"], false);
 }
 
-/// Issue #345: `activity.cancel` stops a preview build like `library.cancelPreviews`.
+/// Issue #345: command cancellation adopts exactly the preview worker's flag.
+/// A full-resolution render is not immediately interruptible; the worker checks the flag
+/// *between* photographs. Testing cancellation before the worker starts is deterministic
+/// even under LLVM instrumentation, unlike racing a 24-photo full render against a timeout.
 #[test]
 fn activity_cancel_stops_a_preview_build() {
+    use crate::activity::Cancel;
+    use crate::cmd::previews::PreviewBuild;
+    use std::sync::atomic::Ordering;
+
     let mut s = demo();
-    let ids: Vec<u64> = s.catalog.photos().map(|p| p.id.0).collect();
-    s.execute("library.buildPreviews", &json!({"ids": ids, "size": "full"})).unwrap();
-    let id = s.activity.list().first().map(|t| t.id).expect("a previews row");
+    let state = PreviewBuild { total: 24, ..Default::default() };
+    let task = s.activity.start("previews", "Building previews", Cancel::Flag(state.cancel.clone()));
+    let id = task.id();
+    assert!(!state.cancel.load(Ordering::Relaxed));
+    assert_eq!(s.activity.list()[0].kind, "previews");
+
     s.execute("activity.cancel", &json!({"id": id})).unwrap();
-    wait_activity_empty(&s);
-    let p = s.execute("library.previewProgress", &json!({})).unwrap();
-    assert_eq!(p["cancelled"], true, "{p}");
-    assert!(p["done"].as_u64() < p["total"].as_u64(), "stopped part-way: {p}");
+    assert!(state.cancel.load(Ordering::Relaxed), "the command must signal the worker's actual flag");
+    assert_eq!(s.activity.list()[0].cancelling, true);
+    drop(task);
+    assert!(s.activity.list().is_empty(), "the task row must be removed after completion");
 }
 
 /// Colour range: a click samples the colour under it, so the mask selects that colour (white
