@@ -161,6 +161,36 @@ mod tests {
     }
 
     #[test]
+    fn gpu_oklab_matrices_are_mutual_inverses() {
+        let [to_lms, from_lms, to_lab, from_lab] = oklab_matrices();
+        let rgb = [0.2, 0.4, 0.8];
+        for (forward, reverse) in [(to_lms, from_lms), (to_lab, from_lab)] {
+            let back = mul(&reverse, mul(&forward, rgb));
+            for i in 0..3 {
+                assert!((back[i] - rgb[i]).abs() < 1e-5, "{back:?} vs {rgb:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn hsv_six_primary_and_secondary_colors() {
+        let sectors = [
+            (0.0, [1.0, 0.0, 0.0]),
+            (60.0, [1.0, 1.0, 0.0]),
+            (120.0, [0.0, 1.0, 0.0]),
+            (180.0, [0.0, 1.0, 1.0]),
+            (240.0, [0.0, 0.0, 1.0]),
+            (300.0, [1.0, 0.0, 1.0]),
+        ];
+        for (hue, expected) in sectors {
+            let actual = hsv_to_rgb(hue, 1.0, 1.0);
+            for i in 0..3 {
+                assert!((actual[i] - expected[i]).abs() < 1e-6, "hue {hue}: {actual:?}");
+            }
+        }
+    }
+
+    #[test]
     fn hsv_hsl_roundtrip() {
         for c in [[0.2, 0.4, 0.6], [1.0, 0.0, 0.0], [0.5, 0.5, 0.5], [0.9, 0.8, 0.1]] {
             let h = rgb_to_hsv(c);
