@@ -465,3 +465,51 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
     ]
 }
+
+#[cfg(test)]
+mod deterministic_cancel_tests {
+    use super::*;
+
+    #[test]
+    fn pre_cancelled_worker_skips_every_render_job_and_finishes() {
+        // Build *real* render jobs, but use the same already-cancelled flag the activity
+        // command sets. No scheduler race or expensive first full-resolution render.
+        let mut session = Session::with_demo();
+        let ids: Vec<_> = session.catalog.photos().take(4).map(|photo| photo.id).collect();
+        let jobs: Vec<_> = ids.iter().map(|&id| jobs_for(&mut session, id, Some(256))).collect();
+        assert_eq!(jobs.len(), 4);
+        assert!(jobs.iter().all(|photo_jobs| !photo_jobs.is_empty()));
+
+        let state = PreviewBuild { total: jobs.len(), ..Default::default() };
+        let task = task_for(&session, &state);
+        let id = task.id();
+        session.execute("activity.cancel", &json!({"id": id})).unwrap();
+        assert!(state.cancel.load(Ordering::Relaxed));
+
+        run_all(jobs, &state, &task);
+        let report = state.json();
+        assert_eq!(report["total"], 4);
+        assert_eq!(report["done"], 0, "not even the first image may be rendered: {report}");
+        assert_eq!(report["failed"], 0);
+        assert_eq!(report["cancelled"], true);
+        assert_eq!(report["running"], false);
+        drop(task);
+        assert!(session.activity.list().is_empty());
+    }
+
+    #[test]
+    fn empty_preview_build_finishes_and_has_no_spurious_failure() {
+        let session = Session::with_demo();
+        let state = PreviewBuild::default();
+        let task = task_for(&session, &state);
+        run_all(Vec::new(), &state, &task);
+        let report = state.json();
+        assert_eq!(report["total"], 0);
+        assert_eq!(report["done"], 0);
+        assert_eq!(report["failed"], 0);
+        assert_eq!(report["cancelled"], false);
+        assert_eq!(report["running"], false);
+        drop(task);
+        assert!(session.activity.list().is_empty());
+    }
+}
