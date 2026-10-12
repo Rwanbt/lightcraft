@@ -1,0 +1,146 @@
+# Fork-specific quality gates. Do not treat an unexecuted job as a passing check.
+name: Quality and deterministic tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "23 3 * * 0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_BUILD_JOBS: "2"
+  RUST_TEST_THREADS: "2"
+
+jobs:
+  linux-quality:
+    name: Linux / full xtask quality gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Linux build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev \
+            libxi-dev libgl1-mesa-dev libxcursor-dev libasound2-dev pkg-config
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: quality-linux
+      - name: Record environment
+        run: |
+          rustc --version
+          cargo --version
+          git rev-parse HEAD
+      - name: Validate LCOV report parser
+        run: python3 -m unittest discover -s scripts -p 'test_quality_coverage.py'
+      - name: Complete repository quality gate
+        run: cargo xtask ci
+
+  platform-tests:
+    name: ${{ matrix.os }} / full workspace tests
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-14]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: quality-${{ matrix.os }}
+      - name: Workspace unit and integration tests
+        run: cargo test --workspace --locked
+
+  coverage-color:
+    name: Linux / instrumented color contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: quality-coverage-color
+      - name: Install instrumented coverage runner
+        run: cargo install cargo-llvm-cov --locked
+      - name: Record coverage toolchain and exact commit
+        run: |
+          rustc --version
+          cargo llvm-cov --version
+          git rev-parse HEAD
+      - name: Measure color crate coverage (no artificial threshold)
+        run: |
+          mkdir -p coverage
+          cargo llvm-cov -p lightcraft-color --lib --locked --lcov --output-path coverage/color.lcov
+      - name: Summarize color coverage by crate
+        run: python3 scripts/quality_coverage.py coverage/color.lcov coverage/color.md coverage/color.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: color-coverage-${{ github.sha }}
+          path: |
+            coverage/color.lcov
+            coverage/color.md
+            coverage/color.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  coverage-workspace:
+    name: Linux / instrumented workspace baseline
+    # Run the expensive full baseline on dedicated quality-baseline PRs, otherwise weekly/manual.
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || (github.event_name == 'pull_request' && startsWith(github.head_ref, 'test/quality-baseline-'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Linux build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev \
+            libxi-dev libgl1-mesa-dev libxcursor-dev libasound2-dev pkg-config
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: quality-coverage-workspace
+      - name: Install instrumented coverage runner
+        run: cargo install cargo-llvm-cov --locked
+      - name: Measure workspace coverage
+        run: |
+          mkdir -p coverage
+          cargo llvm-cov --workspace --locked --lcov --output-path coverage/workspace.lcov
+      - name: Summarize workspace coverage by crate
+        run: python3 scripts/quality_coverage.py coverage/workspace.lcov coverage/workspace.md coverage/workspace.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: workspace-coverage-${{ github.sha }}
+          path: |
+            coverage/workspace.lcov
+            coverage/workspace.md
+            coverage/workspace.json
+          if-no-files-found: warn
+          retention-days: 30

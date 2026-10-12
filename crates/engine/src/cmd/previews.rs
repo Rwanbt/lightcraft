@@ -81,7 +81,22 @@ fn run_all(jobs: Vec<Vec<RenderJob>>, state: &PreviewBuild, task: &TaskGuard) {
         if state.cancel.load(Ordering::Relaxed) {
             break;
         }
-        let ok = photo_jobs.into_iter().all(|j| j.run().rendered.is_ok());
+        let mut ok = true;
+        for job in photo_jobs {
+            // Each photo can need multiple renders (thumbnail + full-size view). When
+            // cancellation was requested during one, do not start the next expensive job.
+            if state.cancel.load(Ordering::Relaxed) {
+                break;
+            }
+            if job.run().rendered.is_err() {
+                ok = false;
+                break;
+            }
+        }
+        // Do not report a cancelled partial photo as finished or as a render failure.
+        if state.cancel.load(Ordering::Relaxed) {
+            break;
+        }
         if !ok {
             state.failed.fetch_add(1, Ordering::Relaxed);
         }
@@ -464,4 +479,93 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(s.preview_build.as_ref().map_or(Value::Null, |b| b.json()))
         }),
     ]
+}
+
+#[cfg(test)]
+mod deterministic_cancel_tests {
+    use super::*;
+
+    #[test]
+    fn pre_cancelled_worker_skips_every_render_job_and_finishes() {
+        // Build *real* render jobs, but use the same already-cancelled flag the activity
+        // command sets. No scheduler race or expensive first full-resolution render.
+        let mut session = Session::with_demo();
+        let ids: Vec<_> = session.catalog.photos().take(4).map(|photo| photo.id).collect();
+        let jobs: Vec<_> = ids.iter().map(|&id| jobs_for(&mut session, id, Some(256))).collect();
+        assert_eq!(jobs.len(), 4);
+        assert!(jobs.iter().all(|photo_jobs| !photo_jobs.is_empty()));
+
+        let state = PreviewBuild { total: jobs.len(), ..Default::default() };
+        let task = task_for(&session, &state);
+        let id = task.id();
+        session.execute("activity.cancel", &json!({"id": id})).unwrap();
+        assert!(state.cancel.load(Ordering::Relaxed));
+
+        run_all(jobs, &state, &task);
+        let report = state.json();
+        assert_eq!(report["total"], 4);
+        assert_eq!(report["done"], 0, "not even the first image may be rendered: {report}");
+        assert_eq!(report["failed"], 0);
+        assert_eq!(report["cancelled"], true);
+        assert_eq!(report["running"], false);
+        drop(task);
+        assert!(session.activity.list().is_empty());
+    }
+
+    #[test]
+    fn cancelling_during_first_render_prevents_the_next_render() {
+        use crate::media::{FileLoader, SourceRef};
+        use lightcraft_raster::Rgb32f;
+        use std::sync::atomic::AtomicUsize;
+
+        let mut session = Session::with_demo();
+        let id = session.catalog.photos().next().unwrap().id;
+        let mut jobs = jobs_for(&mut session, id, Some(256));
+        assert!(jobs.len() >= 2, "thumbnail and view are separate jobs");
+        let mut second = jobs.remove(1);
+        let mut first = jobs.remove(0);
+
+        let state = PreviewBuild { total: 1, ..Default::default() };
+        let flag = state.cancel.clone();
+        let info = first.info.clone();
+        let loader: FileLoader = Arc::new(move |_, _| {
+            flag.store(true, Ordering::Relaxed);
+            Ok((Rgb32f::filled(16, 16, [0.18, 0.18, 0.18]), info.clone()))
+        });
+        first.source = SourceRef::File { path: "synthetic".into(), max_edge: 256, loader: Some(loader), fallback: None, denoise: None };
+
+        let next_calls = Arc::new(AtomicUsize::new(0));
+        let count = next_calls.clone();
+        let next_loader: FileLoader = Arc::new(move |_, _| {
+            count.fetch_add(1, Ordering::Relaxed);
+            Err("the next render must not start".into())
+        });
+        second.source = SourceRef::File { path: "synthetic".into(), max_edge: 256, loader: Some(next_loader), fallback: None, denoise: None };
+        second.cache = None;
+
+        let task = task_for(&session, &state);
+        run_all(vec![vec![first, second]], &state, &task);
+        assert_eq!(next_calls.load(Ordering::Relaxed), 0, "no second render after cancellation");
+        assert_eq!(state.done.load(Ordering::Relaxed), 0, "a partial photo is not complete");
+        assert_eq!(state.failed.load(Ordering::Relaxed), 0, "cancellation is not a decode failure");
+        assert!(state.finished.load(Ordering::Relaxed));
+        drop(task);
+        assert!(session.activity.list().is_empty());
+    }
+
+    #[test]
+    fn empty_preview_build_finishes_and_has_no_spurious_failure() {
+        let session = Session::with_demo();
+        let state = PreviewBuild::default();
+        let task = task_for(&session, &state);
+        run_all(Vec::new(), &state, &task);
+        let report = state.json();
+        assert_eq!(report["total"], 0);
+        assert_eq!(report["done"], 0);
+        assert_eq!(report["failed"], 0);
+        assert_eq!(report["cancelled"], false);
+        assert_eq!(report["running"], false);
+        drop(task);
+        assert!(session.activity.list().is_empty());
+    }
 }

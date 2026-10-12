@@ -32,8 +32,21 @@ impl Scratch {
         Scratch(dir)
     }
     fn path(&self, rel: &str) -> String {
-        self.0.join(rel).to_string_lossy().to_string()
+        // Construct fixture paths component-by-component: a single join("a/b") leaves
+        // mixed separators on Windows, which differ from the scanner's canonical paths.
+        let mut path = self.0.clone();
+        for component in rel.split('/') {
+            path.push(component);
+        }
+        path.to_string_lossy().into_owned()
     }
+}
+
+#[test]
+fn scratch_fixture_paths_use_native_separators() {
+    let dir = Scratch::new("native-path");
+    let expected = dir.0.join("trip").join("day1").join("b.png");
+    assert_eq!(dir.path("trip/day1/b.png"), expected.to_string_lossy());
 }
 
 impl Drop for Scratch {
